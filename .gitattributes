@@ -1,2 +1,92 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Security groups and Bastion host in public subnet. Expects VPC and public subnet IDs as parameters.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+  AllowedAdminCIDR:
+    Type: String
+    Description: IP range allowed to SSH to bastion (e.g. your office/home /32)
+    Default: 0.0.0.0/0
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+
+Resources:
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB security group (HTTP/HTTPS)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags: [{ Key: Name, Value: alb-sg }]
+
+  Ec2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS instance/app security group - only ALB to app port + SSH from bastion
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      Tags: [{ Key: Name, Value: ecs-instance-sg }]
+
+  RdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS access only from ECS instances
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref Ec2SecurityGroup
+      Tags: [{ Key: Name, Value: rds-sg }]
+
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Bastion SG
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedAdminCIDR
+      Tags: [{ Key: Name, Value: bastion-sg }]
+
+  BastionHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      KeyName: !Ref KeyPairName
+      ImageId: ami-0c94855ba95c71c99 # replace with region-specific Amazon Linux 2 AMI or parameterize
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId: !Ref PublicSubnetId
+          GroupSet:
+            - !Ref BastionSecurityGroup
+      Tags: [{ Key: Name, Value: bastion }]
+
+Outputs:
+  AlbSecurityGroup:
+    Value: !Ref AlbSecurityGroup
+  Ec2SecurityGroup:
+    Value: !Ref Ec2SecurityGroup
+  RdsSecurityGroup:
+    Value: !Ref RdsSecurityGroup
+  BastionPublicIP:
+    Value: !GetAtt BastionHost.PublicIp
+
